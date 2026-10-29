@@ -2,7 +2,7 @@ FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Installation du noyau, de GRUB (uniquement UEFI) et des paquets de base
+# 1. Base packages, kernel, GRUB UEFI, network stack, and extended useful tooling
 RUN apt-get update && apt-get install -y \
     ubuntu-standard \
     linux-image-generic \
@@ -13,14 +13,41 @@ RUN apt-get update && apt-get install -y \
     systemd-sysv \
     iputils-ping \
     vim \
+    nano \
     curl \
+    wget \
+    git \
+    net-tools \
+    htop \
+    bash-completion \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Configuration des locales en français
+# 2. Enable NetworkManager and systemd-resolved for target boot, and setup DNS stub
+RUN systemctl enable NetworkManager systemd-resolved && \
+    ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+
+# 3. Configuration of French locales
 RUN locale-gen fr_FR.UTF-8 && update-locale LANG=fr_FR.UTF-8
 
-# Configuration de l'utilisateur et du mot de passe root
+# 4. Default keyboard configuration (French)
+RUN mkdir -p /etc/default && cat << 'EOF' > /etc/default/keyboard
+XKBMODEL="pc105"
+XKBLAYOUT="fr"
+XKBVARIANT=""
+XKBOPTIONS=""
+BACKEND="console-setup"
+EOF
+
+# 5. User configuration and root password
 RUN echo "root:osadmin" | chpasswd && \
     useradd -m -s /bin/bash -G sudo,adm,cdrom,plugdev monuser && \
     echo "monuser:osadmin" | chpasswd
+
+# 6. Clean pre-configuration of GRUB in /etc/default/grub
+RUN cat << 'EOF' > /etc/default/grub
+GRUB_DEFAULT="0"
+GRUB_TIMEOUT="5"
+GRUB_TIMEOUT_STYLE="menu"
+GRUB_DISABLE_LINUX_UUID="false"
+EOF
