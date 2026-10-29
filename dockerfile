@@ -5,6 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # 1. Base packages, kernel, GRUB UEFI, network stack, and extended useful tooling
 RUN apt-get update && apt-get install -y \
     ubuntu-standard \
+    casper \
     linux-image-generic \
     grub-efi-amd64 \
     locales \
