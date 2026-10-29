@@ -1,1 +1,4 @@
 *.squashfs
+*.iso
+iso/live/initrd
+iso/live/vmlinuz

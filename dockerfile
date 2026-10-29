@@ -24,8 +24,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Enable NetworkManager and systemd-resolved for target boot, and setup DNS stub
-RUN systemctl enable NetworkManager systemd-resolved && \
-    ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+RUN systemctl enable NetworkManager systemd-resolved
 
 # 3. Configuration of French locales
 RUN locale-gen fr_FR.UTF-8 && update-locale LANG=fr_FR.UTF-8
