@@ -37,9 +37,13 @@ else
   fi
 fi
 
-# Localiser le filesystem.squashfs
+# Localiser le SquashFS du système à installer (image "install").
+# Repli sur filesystem.squashfs pour les anciennes ISO à image unique.
 if [[ -z "${SQUASHFS_PATH:-}" ]]; then
   for candidate in \
+    "$SCRIPT_DIR/install.squashfs" \
+    /cdrom/casper/install.squashfs \
+    /casper/install.squashfs \
     "$SCRIPT_DIR/filesystem.squashfs" \
     /cdrom/casper/filesystem.squashfs \
     /casper/filesystem.squashfs; do
@@ -50,9 +54,12 @@ if [[ -z "${SQUASHFS_PATH:-}" ]]; then
   done
 fi
 if [[ -z "${SQUASHFS_PATH:-}" ]]; then
+  SQUASHFS_PATH="$(find /media /mnt /run/media -maxdepth 4 -type f -name install.squashfs 2>/dev/null | head -n1 || true)"
+fi
+if [[ -z "${SQUASHFS_PATH:-}" ]]; then
   SQUASHFS_PATH="$(find /media /mnt /run/media -maxdepth 4 -type f -name filesystem.squashfs 2>/dev/null | head -n1 || true)"
 fi
-[[ -n "${SQUASHFS_PATH:-}" && -f "$SQUASHFS_PATH" ]] || die "Impossible de trouver filesystem.squashfs. Indiquez son chemin avec SQUASHFS_PATH=/chemin/vers/filesystem.squashfs."
+[[ -n "${SQUASHFS_PATH:-}" && -f "$SQUASHFS_PATH" ]] || die "Impossible de trouver install.squashfs. Indiquez son chemin avec SQUASHFS_PATH=/chemin/vers/install.squashfs."
 SQUASHFS_PATH="$(readlink -f "$SQUASHFS_PATH")"
 
 echo "Disque cible : $DISK"

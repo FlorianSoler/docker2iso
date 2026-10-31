@@ -4,37 +4,45 @@ Ce petit projet sert à s'entraîner à fabriquer un système Ubuntu "sur-mesure
 
 ## Objectif
 
-- Builder une image Docker Ubuntu 26.04 avec tes paquets/config
-- Exporter cette image en rootfs et la compresser en `filesystem.squashfs`
-- Installer ce rootfs sur un disque VM (UEFI, sans Secure Boot) via `02_vm_install.sh`
+- Builder deux images Docker Ubuntu 26.04 :
+  - `live` : desktop + `casper` + installateur (pour le LiveISO) ;
+  - `install` : desktop propre, sans installateur (système copié sur le disque).
+- Exporter ces images en rootfs et les compresser en `filesystem.squashfs` et `install.squashfs`
+- Installer `install.squashfs` sur un disque VM (UEFI, sans Secure Boot) via `02_vm_install.sh`
 - Avoir GRUB fonctionnel, clavier **AZERTY FR** dans le menu GRUB et dans le système
 
 ## Fichiers du repo
 
 | Fichier | Rôle |
 | --- | --- |
-| `dockerfile` | Définition de l'image Ubuntu custom (hostname, clavier, paquets, utilisateur) |
-| `01_build_squashfs.sh` | Build Docker -> export tar -> squashfs |
+| `dockerfile` | Dockerfile multi-étapes : cible `live` et cible `install` |
+| `01_build_squashfs.sh` | Build des 2 images Docker -> export tar -> 2 squashfs |
 | `02_vm_install.sh` | Partitionnement GPT/EFI + copie squashfs + installation GRUB |
-| `Makefile` | Build complet : Docker -> SquashFS -> `custom-installer.iso` |
+| `liveinstall-terminal.sh` | Wrapper lancé par l'autostart GNOME du live |
+| `liveinstall-autostart.desktop` | Entrée `/etc/xdg/autostart` qui lance l'installateur |
+| `Makefile` | Build complet : Docker -> 2 SquashFS -> `custom-installer.iso` |
 | `iso/` | Arborescence du LiveISO (GRUB, noyau, initrd, installateur) |
-| `filesystem.squashfs` | Rootfs compressé (généré par `01_build_squashfs.sh`) |
+| `filesystem.squashfs` | Rootfs du live (desktop + casper + installateur) |
+| `install.squashfs` | Rootfs du système installé (desktop propre, sans installateur) |
 
 ## Architecture & flux
 
-### 1) Construction du SquashFS
+### 1) Construction des SquashFS
 
 ```mermaid
 flowchart TD
-  A[dockerfile] --> B[docker build -f dockerfile -t ubuntu-26-custom .]
-  B --> B2[update-initramfs + vérification casper/overlay/isofs]
-  B2 --> C[docker create]
-  C --> D[docker export | tar]
-  D --> E[/tmp/docker-rootfs/]
-  E --> F[nettoyage .dockerenv]
-  F --> G[mksquashfs -> filesystem.squashfs]
-  G --> H[unsquashfs -> iso/live/vmlinuz + initrd]
-  H --> I[grub-mkrescue -> custom-installer.iso]
+  A[dockerfile] --> B1[docker build --target live]
+  A --> B2[docker build --target install]
+  B1 --> C1[export rootfs live]
+  B2 --> C2[export rootfs install]
+  C1 --> D1[mksquashfs -> filesystem.squashfs]
+  C2 --> D2[mksquashfs -> install.squashfs]
+  D1 --> E[unsquashfs -> iso/live/vmlinuz + initrd]
+  D1 --> F[copie -> iso/casper/filesystem.squashfs]
+  D2 --> G[copie -> iso/casper/install.squashfs]
+  E --> H[grub-mkrescue -> custom-installer.iso]
+  F --> H
+  G --> H
 ```
 
 ### 2) Installation sur disque UEFI
@@ -61,7 +69,7 @@ flowchart TD
 sequenceDiagram
   participant Live as LiveISO (root)
   participant Disk as Disque /dev/vda/sda/nvme*
-  participant FS as filesystem.squashfs
+  participant FS as install.squashfs
   participant Target as /mnt/target
   participant ESP as /boot/efi
 
@@ -96,9 +104,9 @@ make iso
 
 Le Makefile enchaîne :
 
-1. `./01_build_squashfs.sh` : build Docker, export du rootfs, création de `filesystem.squashfs` ;
-2. copie du SquashFS dans `iso/casper/filesystem.squashfs` ;
-3. extraction de `vmlinuz` et `initrd` **depuis le SquashFS courant** vers `iso/live/` ;
+1. `./01_build_squashfs.sh` : build des cibles Docker `live` et `install`, export des rootfs, création de `filesystem.squashfs` et `install.squashfs` ;
+2. copie des deux SquashFS dans `iso/casper/` (`filesystem.squashfs` et `install.squashfs`) ;
+3. extraction de `vmlinuz` et `initrd` **depuis le SquashFS live** vers `iso/live/` ;
 4. copie de `02_vm_install.sh` dans `iso/install/` ;
 5. génération de `iso/md5sum.txt` pour `casper-md5check` ;
 6. `grub-mkrescue` pour produire `custom-installer.iso`.
@@ -117,17 +125,22 @@ Autres cibles :
 
 ```bash
 make clean      # supprime l'ISO et les fichiers extraits
-make distclean  # supprime aussi filesystem.squashfs
+make distclean  # supprime aussi les deux squashfs
 make run        # boote l'ISO dans QEMU (KVM)
 ```
 
 ### Installation depuis l'ISO
 
 1. Démarrer `custom-installer.iso` en UEFI (ou en BIOS pour un test rapide).
-2. Dans le live, lancer :
+2. La session GNOME du live se connecte automatiquement et **ouvre un terminal qui lance l'installateur tout seul**.
+   Il demande de taper `DETRUIRE /dev/vda` (ou le disque choisi) pour confirmer.
+
+Si besoin, l'installateur peut être relancé à la main :
 
 ```bash
 sudo /cdrom/install/02_vm_install.sh
+# ou, dans le live :
+sudo /usr/local/bin/liveinstall
 ```
 
 > Si l'ISO est montée ailleurs (clé USB), adapte le chemin, par exemple `/media/$USER/.../install/02_vm_install.sh`.
@@ -140,8 +153,8 @@ sudo env TARGET_DISK=/dev/vda /cdrom/install/02_vm_install.sh
 sudo env TARGET_DISK=/dev/nvme0n1 /cdrom/install/02_vm_install.sh
 ```
 
-> Le script demande de taper `DETRUIRE /dev/vda` (ou le disque choisi) pour confirmer.
-> Il retrouve `filesystem.squashfs` dans `/cdrom/casper/`, `/casper/`, ou via `SQUASHFS_PATH=/chemin/vers/filesystem.squashfs`.
+> Le script retrouve `install.squashfs` dans `/cdrom/casper/`, `/casper/`, ou via `SQUASHFS_PATH=/chemin/vers/install.squashfs`.
+> Il retombe sur `filesystem.squashfs` si `install.squashfs` est absent.
 
 ### Premier boot
 
@@ -153,6 +166,8 @@ Tu devrais arriver sur le menu GRUB et ton système devrait booter normalement.
 
 ## Pourquoi ces corrections ?
 
+- **Deux images séparées** : la cible `live` embarque `casper` et l'installateur ; la cible `install` est le système propre copié sur le disque (sans `casper` ni autostart).
+- **Installateur automatique** : une entrée `/etc/xdg/autostart` lance `gnome-terminal` au login du live, qui exécute l'installateur.
 - **Détection dynamique du noyau** : plus besoin de hardcoder la version. Le script prend le plus récent présent dans `/boot/` après copie.
 - **Initramfs régénéré en fin de build** : `update-initramfs -u -k all` après l'installation des paquets garantit la présence de `scripts/casper`, `overlay.ko` et `isofs.ko`. Un initramfs généré trop tôt ne peut pas monter le SquashFS.
 - **Noyau/initrd extraits du SquashFS** : `make iso` évite les fichiers périmés dans `iso/live/`.
