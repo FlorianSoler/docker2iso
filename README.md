@@ -15,7 +15,9 @@ Ce petit projet sert à s'entraîner à fabriquer un système Ubuntu "sur-mesure
 | --- | --- |
 | `dockerfile` | Définition de l'image Ubuntu custom (hostname, clavier, paquets, utilisateur) |
 | `01_build_squashfs.sh` | Build Docker -> export tar -> squashfs |
-| `02_vm_install.sh` | Partitionnement GPT/EFI + copie squashfs + GRUB + config clavier FR |
+| `02_vm_install.sh` | Partitionnement GPT/EFI + copie squashfs + installation GRUB |
+| `Makefile` | Build complet : Docker -> SquashFS -> `custom-installer.iso` |
+| `iso/` | Arborescence du LiveISO (GRUB, noyau, initrd, installateur) |
 | `filesystem.squashfs` | Rootfs compressé (généré par `01_build_squashfs.sh`) |
 
 ## Architecture & flux
@@ -24,12 +26,15 @@ Ce petit projet sert à s'entraîner à fabriquer un système Ubuntu "sur-mesure
 
 ```mermaid
 flowchart TD
-  A[Dockerfile] --> B[docker build -t ubuntu-26-custom .]
-  B --> C[docker create]
+  A[dockerfile] --> B[docker build -f dockerfile -t ubuntu-26-custom .]
+  B --> B2[update-initramfs + vérification casper/overlay/isofs]
+  B2 --> C[docker create]
   C --> D[docker export | tar]
   D --> E[/tmp/docker-rootfs/]
   E --> F[nettoyage .dockerenv]
   F --> G[mksquashfs -> filesystem.squashfs]
+  G --> H[unsquashfs -> iso/live/vmlinuz + initrd]
+  H --> I[grub-mkrescue -> custom-installer.iso]
 ```
 
 ### 2) Installation sur disque UEFI
@@ -81,49 +86,76 @@ sequenceDiagram
 
 ## Utilisation
 
-### Étape 1 : Builder le squashfs (sur ta machine hôte avec Docker)
+### Build de l'ISO (recommandé)
+
+Prérequis : Docker, `grub-mkrescue` (`grub-pc-bin`, `grub-efi-amd64-bin`), `xorriso`, `mtools` et `squashfs-tools`.
 
 ```bash
-chmod +x 01_build_squashfs.sh
-./01_build_squashfs.sh
+make iso
 ```
 
-Résultat attendu : `./filesystem.squashfs` dans le répertoire courant.
+Le Makefile enchaîne :
 
-> Si `mksquashfs` n'est pas installé, le script le fera. Tu peux aussi l'installer manuellement `sudo apt install squashfs-tools`.
+1. `./01_build_squashfs.sh` : build Docker, export du rootfs, création de `filesystem.squashfs` ;
+2. copie du SquashFS dans `iso/casper/filesystem.squashfs` ;
+3. extraction de `vmlinuz` et `initrd` **depuis le SquashFS courant** vers `iso/live/` ;
+4. copie de `02_vm_install.sh` dans `iso/install/` ;
+5. génération de `iso/md5sum.txt` pour `casper-md5check` ;
+6. `grub-mkrescue` pour produire `custom-installer.iso`.
 
-### Étape 2 : Créer un ISO Live ou utiliser un live existant
+> L'extraction depuis le SquashFS évite de garder un noyau/initrd périmé dans `iso/live/`.
+> Le `grub.cfg` est volontairement verbeux (`quiet splash` retiré) pour voir les erreurs de boot. Tu peux les remettre une fois que tout fonctionne.
 
-Boot ta VM avec un LiveISO Ubuntu (ou autre live compatible). Copie `02_vm_install.sh` + `filesystem.squashfs` sur ce live (clé USB, partage réseau, ou dans le disque virtuel monté).
-
-### Étape 3 : Installer depuis le Live
-
-Depuis le live, en root/sudo :
+Après une modification du `dockerfile`, repartir de zéro :
 
 ```bash
-sudo chmod +x 02_vm_install.sh
-sudo ./02_vm_install.sh
+make distclean
+make iso
 ```
 
-Si ton disque n'est pas détecté automatiquement, force-le :
+Autres cibles :
 
 ```bash
-TARGET_DISK=/dev/sda sudo ./02_vm_install.sh
+make clean      # supprime l'ISO et les fichiers extraits
+make distclean  # supprime aussi filesystem.squashfs
+make run        # boote l'ISO dans QEMU (KVM)
+```
+
+### Installation depuis l'ISO
+
+1. Démarrer `custom-installer.iso` en UEFI (ou en BIOS pour un test rapide).
+2. Dans le live, lancer :
+
+```bash
+sudo /cdrom/install/02_vm_install.sh
+```
+
+> Si l'ISO est montée ailleurs (clé USB), adapte le chemin, par exemple `/media/$USER/.../install/02_vm_install.sh`.
+
+Si le disque n'est pas détecté automatiquement :
+
+```bash
+sudo env TARGET_DISK=/dev/vda /cdrom/install/02_vm_install.sh
 # ou
-TARGET_DISK=/dev/nvme0n1 sudo ./02_vm_install.sh
+sudo env TARGET_DISK=/dev/nvme0n1 /cdrom/install/02_vm_install.sh
 ```
 
-### Étape 4 : Premier boot
+> Le script demande de taper `DETRUIRE /dev/vda` (ou le disque choisi) pour confirmer.
+> Il retrouve `filesystem.squashfs` dans `/cdrom/casper/`, `/casper/`, ou via `SQUASHFS_PATH=/chemin/vers/filesystem.squashfs`.
+
+### Premier boot
 
 1. Éteindre la VM
 2. Retirer l'ISO
 3. Démarrer sur le disque
 
-Tu devrais arriver sur le menu GRUB en **AZERTY FR** et ton système devrait booter normalement.
+Tu devrais arriver sur le menu GRUB et ton système devrait booter normalement.
 
 ## Pourquoi ces corrections ?
 
 - **Détection dynamique du noyau** : plus besoin de hardcoder la version. Le script prend le plus récent présent dans `/boot/` après copie.
+- **Initramfs régénéré en fin de build** : `update-initramfs -u -k all` après l'installation des paquets garantit la présence de `scripts/casper`, `overlay.ko` et `isofs.ko`. Un initramfs généré trop tôt ne peut pas monter le SquashFS.
+- **Noyau/initrd extraits du SquashFS** : `make iso` évite les fichiers périmés dans `iso/live/`.
 - **Keymap GRUB** : `grub-kbdcomp` génère `fr.gkb` et on le charge dans `EFI/BOOT/grub.cfg`. Beaucoup de firmwares UEFI tombent directement sur `\EFI\BOOT\BOOTX64.EFI` s'ils ne trouvent pas l'entrée "ubuntu" dans le boot menu.
 - **`update-grub` dans le chroot** : génère un `grub.cfg` cohérent avec les modules, UUID, noyaux réels.
 - **Détection disque** : fonctionne pour `vda/sda/nvme/xvda`.
@@ -132,6 +164,8 @@ Tu devrais arriver sur le menu GRUB en **AZERTY FR** et ton système devrait boo
 
 | Symptôme | Vérification | Solution |
 | --- | --- | --- |
+| Échec `Failed to start initrd-switch-root.service` | Sur l'hôte, `lsinitramfs iso/live/initrd` doit lister `scripts/casper`, `overlay.ko` et `isofs.ko` | Rebuild avec l'étape `update-initramfs` finale du `dockerfile`, puis `make distclean && make iso`. |
+| `casper` ne trouve pas le SquashFS / panic `iso-scan` | Vérifier `iso/boot/grub/grub.cfg` | La ligne doit être `linux /live/vmlinuz boot=casper ---` (sans `iso-scan/filename=...`). |
 | Reste en QWERTY dans GRUB | Booter sur le disque, appuyer `c` dans GRUB (shell) et taper `keymap` ou regarder le layout | Le fallback `EFI/BOOT/grub.cfg` doit charger `fr.gkb`. Si absent, régénère avec le script corrigé. |
 | GRUB apparaît mais rien ne démarre / erreur "you need to load kernel first" | Depuis GRUB shell: `ls (hd0,gpt2)/boot/` pour voir les vrais `vmlinuz-*` et `initrd.img-*` | Vérifie que les chemins existent bien. Le script prend le plus récent dynamiquement. |
 | N'arrive pas sur GRUB, repart directement sur le live/UEFI | Vérifier l'ordre de boot UEFI (VirtualBox/virt-manager) | Forcer boot sur `ubuntu` ou `UEFI: <nom du disque>`. Le `--removable` copie aussi `BOOTX64.EFI` ce qui aide beaucoup. |

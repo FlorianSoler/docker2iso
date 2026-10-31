@@ -1,18 +1,39 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+cd "$(dirname -- "${BASH_SOURCE[0]}")"
+
+IMAGE="ubuntu-26-custom"
+ROOTFS="/tmp/docker-rootfs"
+CONTAINER_ID=""
+
+cleanup() {
+  set +e
+  if [[ -n "$CONTAINER_ID" ]]; then
+    docker rm -f "$CONTAINER_ID" >/dev/null 2>&1 || true
+  fi
+  if [[ -d "$ROOTFS" ]]; then
+    sudo rm -rf "$ROOTFS"
+  fi
+}
+trap cleanup EXIT
+
 # 1. Construire l'image Docker
-docker build -t ubuntu-26-custom .
+docker build -f dockerfile -t "$IMAGE" .
 
 # 2. Créer un conteneur temporaire et exporter le système de fichiers
-CONTAINER_ID=$(docker create ubuntu-26-custom)
-mkdir -p /tmp/docker-rootfs
-docker export $CONTAINER_ID | sudo tar -xf - -C /tmp/docker-rootfs
-docker rm $CONTAINER_ID
+CONTAINER_ID="$(docker create "$IMAGE")"
+sudo rm -rf "$ROOTFS"
+mkdir -p "$ROOTFS"
+docker export "$CONTAINER_ID" | sudo tar -xf - -C "$ROOTFS"
 
-# 3. Supprimer le fichier d'environnement Docker
-sudo rm -rf /tmp/docker-rootfs/.dockerenv
+# 3. Supprimer les fichiers propres au conteneur
+sudo rm -rf "$ROOTFS/.dockerenv"
 
-# 4. Compresser en SquashFS (stocké dans votre dossier personnel)
-sudo apt update && sudo apt install -y squashfs-tools
-sudo mksquashfs /tmp/docker-rootfs ./filesystem.squashfs -comp xz -b 1M
+# 4. Compresser en SquashFS
+sudo apt-get update && sudo apt-get install -y squashfs-tools
+sudo rm -f ./filesystem.squashfs
+sudo mksquashfs "$ROOTFS" ./filesystem.squashfs -noappend -comp xz -b 1M
 
-# 5. Nettoyer le dossier temporaire
-sudo rm -rf /tmp/docker-rootfs
+echo
+echo "SquashFS prêt : $(pwd)/filesystem.squashfs"

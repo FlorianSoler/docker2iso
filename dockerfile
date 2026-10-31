@@ -24,6 +24,11 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ubuntu-desktop-minimal \
+    gnome-terminal \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # 2. Enable NetworkManager and systemd-resolved for target boot, and setup DNS stub
 RUN systemctl enable NetworkManager systemd-resolved
 
@@ -51,3 +56,10 @@ GRUB_TIMEOUT="5"
 GRUB_TIMEOUT_STYLE="menu"
 GRUB_DISABLE_LINUX_UUID="false"
 EOF
+
+# 7. Regenerate the initramfs once every package is installed.
+#    This is required so that casper and its kernel modules (overlay, isofs, ...)
+#    are really included. Running update-initramfs during the package
+#    installation can produce an initramfs without those modules.
+RUN echo 'RESUME=none' > /etc/initramfs-tools/conf.d/resume && \
+    update-initramfs -u -k all

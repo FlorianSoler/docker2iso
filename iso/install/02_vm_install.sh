@@ -38,8 +38,21 @@ else
 fi
 
 # Localiser le filesystem.squashfs
-SQUASHFS_PATH="${SQUASHFS_PATH:-$SCRIPT_DIR/filesystem.squashfs}"
-[[ -f "$SQUASHFS_PATH" ]] || die "Impossible de trouver filesystem.squashfs."
+if [[ -z "${SQUASHFS_PATH:-}" ]]; then
+  for candidate in \
+    "$SCRIPT_DIR/filesystem.squashfs" \
+    /cdrom/casper/filesystem.squashfs \
+    /casper/filesystem.squashfs; do
+    if [[ -f "$candidate" ]]; then
+      SQUASHFS_PATH="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "${SQUASHFS_PATH:-}" ]]; then
+  SQUASHFS_PATH="$(find /media /mnt /run/media -maxdepth 4 -type f -name filesystem.squashfs 2>/dev/null | head -n1 || true)"
+fi
+[[ -n "${SQUASHFS_PATH:-}" && -f "$SQUASHFS_PATH" ]] || die "Impossible de trouver filesystem.squashfs. Indiquez son chemin avec SQUASHFS_PATH=/chemin/vers/filesystem.squashfs."
 SQUASHFS_PATH="$(readlink -f "$SQUASHFS_PATH")"
 
 echo "Disque cible : $DISK"
@@ -112,7 +125,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 grub-install \
   --efi-directory=/boot/efi \
-  --bootloader-id="$BOOT_ID" \
+  --bootloader-id="$BOOT_ID"
 
 update-grub
 CHROOT
