@@ -3,7 +3,8 @@ set -Eeuo pipefail
 
 TARGET_MOUNT="/mnt/target"
 SQUASH_MOUNT="/mnt/squash"
-BOOT_ID="GRUB"
+BOOT_ID="${BOOT_ID:-ubuntu}"
+TARGET_HOSTNAME="${TARGET_HOSTNAME:-ubuntu-custom}"
 
 die() { echo "ERREUR : $*" >&2; exit 1; }
 log() { echo; echo "--> $*"; }
@@ -110,6 +111,23 @@ mount "$P1" "$TARGET_MOUNT/boot/efi"
 mount -t squashfs -o loop,ro "$SQUASHFS_PATH" "$SQUASH_MOUNT"
 rsync -aHAX --numeric-ids --info=progress2 "$SQUASH_MOUNT/" "$TARGET_MOUNT/"
 
+log "Configuration de l'hôte et de l'identité machine"
+printf '%s\n' "$TARGET_HOSTNAME" > "$TARGET_MOUNT/etc/hostname"
+cat > "$TARGET_MOUNT/etc/hosts" <<HOSTS
+127.0.0.1 localhost
+127.0.1.1 $TARGET_HOSTNAME
+::1 localhost ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+HOSTS
+rm -f "$TARGET_MOUNT/etc/machine-id" "$TARGET_MOUNT/var/lib/dbus/machine-id"
+mkdir -p "$TARGET_MOUNT/var/lib/dbus" "$TARGET_MOUNT/var/log/journal"
+if grep -q '^systemd-journal:' "$TARGET_MOUNT/etc/group"; then
+  JOURNAL_GID="$(grep '^systemd-journal:' "$TARGET_MOUNT/etc/group" | cut -d: -f3)"
+  chown "0:$JOURNAL_GID" "$TARGET_MOUNT/var/log/journal"
+  chmod 2755 "$TARGET_MOUNT/var/log/journal"
+fi
+
 log "Écriture de /etc/fstab"
 UUID_ROOT="$(blkid -s UUID -o value "$P2")"
 UUID_EFI="$(blkid -s UUID -o value "$P1")"
@@ -130,11 +148,75 @@ BOOT_ID="$1"
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# Réparer les droits du compte utilisateur et le home du greeter GDM.
+if id monuser >/dev/null 2>&1; then
+  chown -R monuser:monuser /home/monuser
+fi
+if getent passwd gdm >/dev/null 2>&1 && getent group gdm >/dev/null 2>&1; then
+  install -d -o gdm -g gdm -m 0700 /var/lib/gdm3
+else
+  install -d -m 0700 /var/lib/gdm3
+fi
+
+# Identité machine unique pour le système installé.
+rm -f /etc/machine-id /var/lib/dbus/machine-id
+if ! systemd-machine-id-setup; then
+  echo "Avertissement : /etc/machine-id sera généré au premier démarrage." >&2
+fi
+mkdir -p /var/lib/dbus
+ln -sfn /etc/machine-id /var/lib/dbus/machine-id
+
+# Chaîne Secure Boot : shim signé Microsoft -> GRUB signé Canonical.
+dpkg -s shim-signed >/dev/null 2>&1 || {
+  echo "ERREUR : shim-signed n'est pas installé." >&2
+  exit 1
+}
 grub-install \
+  --target=x86_64-efi \
   --efi-directory=/boot/efi \
-  --bootloader-id="$BOOT_ID"
+  --bootloader-id="$BOOT_ID" \
+  --uefi-secure-boot \
+  --recheck
 
 update-grub
+
+# Le firmware peut aussi démarrer le chemin amovible EFI/BOOT.
+SHIM_SIGNED=/usr/lib/shim/shimx64.efi.signed
+[[ -f /usr/lib/shim/shimx64.efi.signed.latest ]] && SHIM_SIGNED=/usr/lib/shim/shimx64.efi.signed.latest
+GRUB_SIGNED=/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed
+for f in "$SHIM_SIGNED" "$GRUB_SIGNED"; do
+  [[ -f "$f" ]] || { echo "ERREUR : fichier signé manquant : $f" >&2; exit 1; }
+done
+install -D -m 0644 "$SHIM_SIGNED" /boot/efi/EFI/BOOT/BOOTX64.EFI
+install -D -m 0644 "$GRUB_SIGNED" /boot/efi/EFI/BOOT/grubx64.efi
+# Ne pas installer fbx64.efi : shim le lance depuis EFI/BOOT et, sans
+# BOOTX64.CSV, il redémarre la machine au lieu de charger GRUB.
+for f in mmx64.efi; do
+  if [[ -f "/usr/lib/shim/$f" ]]; then
+    install -D -m 0644 "/usr/lib/shim/$f" "/boot/efi/EFI/BOOT/$f"
+  fi
+done
+
+# Le GRUB signé Canonical a /EFI/ubuntu comme préfixe compilé.
+if [[ ! -f /boot/efi/EFI/ubuntu/grub.cfg ]]; then
+  install -d -m 0755 /boot/efi/EFI/ubuntu
+  cat > /boot/efi/EFI/ubuntu/grub.cfg <<'EOF'
+search --no-floppy --file /boot/grub/grub.cfg --set=root
+set prefix=($root)/boot/grub
+configfile ($root)/boot/grub/grub.cfg
+EOF
+fi
+
+if command -v sbverify >/dev/null 2>&1; then
+  sbverify --list /boot/efi/EFI/BOOT/BOOTX64.EFI >/dev/null || {
+    echo "ERREUR : BOOTX64.EFI n'est pas signé." >&2
+    exit 1
+  }
+  sbverify --list /boot/efi/EFI/BOOT/grubx64.efi >/dev/null || {
+    echo "ERREUR : grubx64.efi n'est pas signé." >&2
+    exit 1
+  }
+fi
 CHROOT
 
 sync

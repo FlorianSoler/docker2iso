@@ -12,6 +12,14 @@ RUN apt-get update && apt-get install -y \
     ubuntu-standard \
     linux-image-generic \
     grub-efi-amd64 \
+    grub-efi-amd64-signed \
+    shim-signed \
+    sbsigntool \
+    secureboot-db \
+    efibootmgr \
+    dosfstools \
+    parted \
+    rsync \
     locales \
     sudo \
     network-manager \
@@ -28,11 +36,24 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# 1b. Fixed configuration files. The legacy Docker builder does not support
+#     heredocs, so these files must be copied instead of generated in RUN.
+COPY config/keyboard /etc/default/keyboard
+COPY config/grub /etc/default/grub
+
 # 2. Desktop environment
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ubuntu-desktop-minimal \
     gnome-terminal \
+    fonts-ubuntu \
+    xserver-xorg \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# GNOME/GDM needs a writable home directory for its greeter account.
+RUN install -d -m 0700 /var/lib/gdm3 && \
+    if getent passwd gdm >/dev/null && getent group gdm >/dev/null; then \
+      chown gdm:gdm /var/lib/gdm3; \
+    fi
 
 # 3. Enable NetworkManager and systemd-resolved for target boot, and setup DNS stub
 RUN systemctl enable NetworkManager systemd-resolved
@@ -40,29 +61,14 @@ RUN systemctl enable NetworkManager systemd-resolved
 # 4. Configuration of French locales
 RUN locale-gen fr_FR.UTF-8 && update-locale LANG=fr_FR.UTF-8
 
-# 5. Default keyboard configuration (French)
-RUN mkdir -p /etc/default && cat << 'EOF' > /etc/default/keyboard
-XKBMODEL="pc105"
-XKBLAYOUT="fr"
-XKBVARIANT=""
-XKBOPTIONS=""
-BACKEND="console-setup"
-EOF
-
-# 6. User configuration and root password
+# 5. User configuration and root password
 RUN echo "root:osadmin" | chpasswd && \
-    useradd -m -s /bin/bash -G sudo,adm,cdrom,plugdev monuser && \
+    GROUPS="sudo,adm,cdrom,plugdev,audio,video,render,input,netdev,scanner,lp,users" && \
+    if getent group bluetooth >/dev/null; then GROUPS="$GROUPS,bluetooth"; fi && \
+    useradd -m -s /bin/bash -G "$GROUPS" monuser && \
     echo "monuser:osadmin" | chpasswd
 
-# 7. Clean pre-configuration of GRUB in /etc/default/grub
-RUN cat << 'EOF' > /etc/default/grub
-GRUB_DEFAULT="0"
-GRUB_TIMEOUT="5"
-GRUB_TIMEOUT_STYLE="menu"
-GRUB_DISABLE_LINUX_UUID="false"
-EOF
-
-# 8. Regenerate the initramfs once every package is installed.
+# 6. Regenerate the initramfs once every package is installed.
 #    initramfs-tools is installed explicitly because the kernel package no
 #    longer pulls it in on Ubuntu 26.04 (casper, which depends on it, is only
 #    installed in the live stage). The live stage rebuilds the initramfs again
