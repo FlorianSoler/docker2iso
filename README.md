@@ -1,4 +1,6 @@
-# LiveInstall - Ubuntu 26.04 custom, live et installable (UEFI Secure Boot + BIOS)
+# docker2iso — Ubuntu 26.04 live et installable (UEFI Secure Boot + BIOS)
+
+> Forge d'ISO Ubuntu hybride : système live et système installable, signés Secure Boot (UEFI + BIOS), construits depuis Docker en une seule commande `make iso`.
 
 Ce projet construit une ISO hybride à partir de deux images Docker Ubuntu 26.04 :
 
