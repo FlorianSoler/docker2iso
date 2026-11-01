@@ -1,16 +1,20 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := iso
 
-LIVE_SQUASHFS    := filesystem.squashfs
-INSTALL_SQUASHFS := install.squashfs
-ISO_DIR  := iso
-ISO_OUT  := custom-installer.iso
+LIVE_SQUASHFS    := out/filesystem.squashfs
+INSTALL_SQUASHFS := out/install.squashfs
+ISO_DIR  := build/iso
+ISO_OUT  := out/custom-installer.iso
 VOLID    := CUSTOM_LINUX_INSTALLER
 BUILD_DIR := build
 BIOS_ISO := $(BUILD_DIR)/bios.iso
 
-SQUASHFS_DEPS := dockerfile 01_build_squashfs.sh 02_vm_install.sh liveinstall-terminal.sh liveinstall-autostart.desktop config/keyboard config/grub
-ISO_DEPS := 03_build_efi.sh config/efi-grub.cfg iso/boot/grub/grub.cfg
+IMAGE_FILES := $(shell find image -type f -o -type l 2>/dev/null)
+ISO_TEMPLATE := $(shell find iso -type f 2>/dev/null)
+
+SQUASHFS_DEPS := Containerfile scripts/build-squashfs.sh scripts/finalize-rootfs.sh \
+                 scripts/install.sh $(IMAGE_FILES)
+ISO_DEPS := scripts/build-efi.sh scripts/install.sh $(ISO_TEMPLATE)
 
 .PHONY: all iso squashfs clean distclean run
 
@@ -19,7 +23,7 @@ squashfs: $(LIVE_SQUASHFS) $(INSTALL_SQUASHFS)
 
 # Cible groupée : le script produit les deux SquashFS en une seule passe.
 $(LIVE_SQUASHFS) $(INSTALL_SQUASHFS) &: $(SQUASHFS_DEPS)
-	./01_build_squashfs.sh
+	./scripts/build-squashfs.sh
 
 iso: $(LIVE_SQUASHFS) $(INSTALL_SQUASHFS) $(ISO_DEPS)
 	@set -euo pipefail; \
@@ -33,17 +37,17 @@ iso: $(LIVE_SQUASHFS) $(INSTALL_SQUASHFS) $(ISO_DEPS)
 	test -n "$$KVER" || { echo "Kernel introuvable dans $(LIVE_SQUASHFS)"; exit 1; }; \
 	echo "Kernel utilisé : $$KVER"; \
 	rm -f $(ISO_OUT) $(BIOS_ISO); \
-	mkdir -p $(ISO_DIR)/casper $(ISO_DIR)/live $(ISO_DIR)/install $(ISO_DIR)/EFI/ubuntu $(BUILD_DIR)/bios-tree; \
-	rm -f $(ISO_DIR)/casper/filesystem.squashfs $(ISO_DIR)/casper/install.squashfs; \
+	rm -rf $(ISO_DIR); \
+	mkdir -p $(ISO_DIR)/casper $(ISO_DIR)/live $(ISO_DIR)/install $(ISO_DIR)/EFI/ubuntu $(BUILD_DIR)/bios-tree $(dir $(ISO_OUT)); \
+	cp -a iso/. $(ISO_DIR)/; \
 	cp $(LIVE_SQUASHFS) $(ISO_DIR)/casper/filesystem.squashfs; \
 	cp $(INSTALL_SQUASHFS) $(ISO_DIR)/casper/install.squashfs; \
-	install -m 0755 02_vm_install.sh $(ISO_DIR)/install/02_vm_install.sh; \
+	install -m 0755 scripts/install.sh $(ISO_DIR)/install/install.sh; \
 	unsquashfs -cat $(LIVE_SQUASHFS) boot/vmlinuz-$$KVER > $(ISO_DIR)/live/vmlinuz; \
 	unsquashfs -cat $(LIVE_SQUASHFS) boot/initrd.img-$$KVER > $(ISO_DIR)/live/initrd; \
 	chmod 0644 $(ISO_DIR)/live/vmlinuz $(ISO_DIR)/live/initrd; \
-	./03_build_efi.sh $(LIVE_SQUASHFS) $(ISO_DIR)/efi.img; \
-	install -m 0644 config/efi-grub.cfg $(ISO_DIR)/EFI/ubuntu/grub.cfg; \
-	rm -rf $(ISO_DIR)/boot/grub/i386-pc; \
+	./scripts/build-efi.sh $(LIVE_SQUASHFS) $(ISO_DIR)/efi.img; \
+	install -m 0644 iso/boot/grub/efi.cfg $(ISO_DIR)/EFI/ubuntu/grub.cfg; \
 	grub-mkrescue -d /usr/lib/grub/i386-pc -o $(BIOS_ISO) $(BUILD_DIR)/bios-tree -- -volid "$(VOLID)"; \
 	xorriso -osirrox on -indev $(BIOS_ISO) -extract /boot/grub/i386-pc $(ISO_DIR)/boot/grub/i386-pc; \
 	chmod -R u+rwX,go+rX $(ISO_DIR)/boot/grub/i386-pc; \
@@ -61,14 +65,7 @@ iso: $(LIVE_SQUASHFS) $(INSTALL_SQUASHFS) $(ISO_DEPS)
 	echo "ISO prête : $(ISO_OUT)"
 
 clean:
-	rm -f $(ISO_OUT)
-	rm -f $(ISO_DIR)/casper/filesystem.squashfs $(ISO_DIR)/casper/install.squashfs
-	rm -f $(ISO_DIR)/live/vmlinuz $(ISO_DIR)/live/initrd
-	rm -f $(ISO_DIR)/md5sum.txt
-	rm -f $(ISO_DIR)/efi.img
-	rm -rf $(ISO_DIR)/EFI
-	rm -rf $(ISO_DIR)/boot/grub/i386-pc
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(ISO_OUT)
 
 distclean: clean
 	rm -f $(LIVE_SQUASHFS) $(INSTALL_SQUASHFS)

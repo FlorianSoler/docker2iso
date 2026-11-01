@@ -10,7 +10,7 @@ die() { echo "ERREUR : $*" >&2; exit 1; }
 log() { echo; echo "--> $*"; }
 
 if (( EUID != 0 )); then
-  die "Lancez ce script en root : sudo env TARGET_DISK=/dev/sda ./02_vm_install.sh"
+  die "Lancez ce script en root : sudo env TARGET_DISK=/dev/sda ./scripts/install.sh"
 fi
 
 for cmd in lsblk findmnt parted partprobe udevadm mkfs.fat mkfs.ext4 blkid mount umount rsync chroot wipefs; do

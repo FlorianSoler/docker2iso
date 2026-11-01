@@ -36,10 +36,10 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 1b. Fixed configuration files. The legacy Docker builder does not support
-#     heredocs, so these files must be copied instead of generated in RUN.
-COPY config/keyboard /etc/default/keyboard
-COPY config/grub /etc/default/grub
+# 1b. Les fichiers de configuration du dépôt ne sont pas copiés ici : ils le
+#     sont dans chaque étage final (install/live), après toutes les installations
+#     de paquets. Ainsi une configuration du dépôt remplace toujours celle
+#     générée par les postinst Debian. Voir image/README.md.
 
 # 2. Desktop environment
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -58,8 +58,9 @@ RUN install -d -m 0700 /var/lib/gdm3 && \
 # 3. Enable NetworkManager and systemd-resolved for target boot, and setup DNS stub
 RUN systemctl enable NetworkManager systemd-resolved
 
-# 4. Configuration of French locales
-RUN locale-gen fr_FR.UTF-8 && update-locale LANG=fr_FR.UTF-8
+# 4. Configuration of French locales. The LANG defaults are shipped by the
+#    image/common overlay (/etc/default/locale and /etc/locale.conf).
+RUN locale-gen fr_FR.UTF-8
 
 # 5. User configuration and root password
 RUN echo "root:osadmin" | chpasswd && \
@@ -84,6 +85,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends initramfs-tools
 # ---------------------------------------------------------------------------
 FROM base AS install
 
+# Arborescence overlay : common d'abord, puis les fichiers propres à la cible.
+# Les COPY suivants écrasent les mêmes chemins dans les couches précédentes.
+COPY image/common/ /
+COPY image/install/ /
+# Marqueur Git du dossier d'overlay vide : ne doit pas apparaître dans le rootfs.
+RUN rm -f /.gitkeep
+
 
 # ---------------------------------------------------------------------------
 # live : environnement du LiveISO (casper + installateur lancé automatiquement)
@@ -94,10 +102,13 @@ FROM base AS live
 RUN apt-get update && apt-get install -y --no-install-recommends casper \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Installateur, wrapper de terminal et entrée d'autostart GNOME
-COPY 02_vm_install.sh /usr/local/bin/liveinstall
-COPY liveinstall-terminal.sh /usr/local/bin/liveinstall-terminal
-COPY liveinstall-autostart.desktop /etc/xdg/autostart/liveinstall.desktop
+# Overlay appliqué après casper pour que les postinst ne réécrivent pas la
+# configuration du dépôt. Le stage live ajoute ensuite ses fichiers propres.
+COPY image/common/ /
+COPY image/live/ /
+
+# L'installateur est un script du dépôt, copié dans l'image live et dans l'ISO.
+COPY scripts/install.sh /usr/local/bin/liveinstall
 
 RUN chmod 0755 /usr/local/bin/liveinstall /usr/local/bin/liveinstall-terminal
 

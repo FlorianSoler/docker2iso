@@ -4,4 +4,6 @@
 *.iso
 *.squashfs
 build/
+out/
 iso/
+README.md

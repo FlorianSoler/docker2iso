@@ -1,9 +1,4 @@
 *.squashfs
 *.iso
 build/
-iso/live/initrd
-iso/live/vmlinuz
-iso/md5sum.txt
-iso/efi.img
-iso/EFI/
-iso/boot/grub/i386-pc/
+out/

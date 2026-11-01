@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-cd "$(dirname -- "${BASH_SOURCE[0]}")"
+cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
-LIVE_SQUASHFS="${1:-${LIVE_SQUASHFS:-filesystem.squashfs}}"
-OUTPUT="${2:-${EFI_IMG:-iso/efi.img}}"
+LIVE_SQUASHFS="${1:-${LIVE_SQUASHFS:-out/filesystem.squashfs}}"
+OUTPUT="${2:-${EFI_IMG:-build/iso/efi.img}}"
 
 die() { echo "ERREUR : $*" >&2; exit 1; }
 
@@ -47,7 +47,7 @@ done
 # On recherche le fichier plutôt que le label : le même fichier est copié
 # à la racine de l'ISO, car GRUB voit le système ISO9660 et non l'image EFI
 # El Torito dans laquelle il a été chargé.
-install -m 0644 config/efi-grub.cfg "$TMP/EFI/ubuntu/grub.cfg"
+install -m 0644 iso/boot/grub/efi.cfg "$TMP/EFI/ubuntu/grub.cfg"
 
 rm -f "$OUTPUT"
 dd if=/dev/zero of="$OUTPUT" bs=1M count=16 status=none
