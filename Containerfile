@@ -89,6 +89,8 @@ FROM base AS install
 # Les COPY suivants écrasent les mêmes chemins dans les couches précédentes.
 COPY image/common/ /
 COPY image/install/ /
+
+RUN apt-get update && apt-get install -y network-manager-gnome && apt-get clean && rm -rf /var/lib/apt/lists/*
 # Marqueur Git du dossier d'overlay vide : ne doit pas apparaître dans le rootfs.
 RUN rm -f /.gitkeep
 
